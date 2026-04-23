@@ -62,7 +62,7 @@ class WappalyzerDriver:
             self._initialized = True
             logger.info("Wappalyzer driver initialized")
         except Exception as e:
-            logger.error(f"Driver initialization failed: {str(e)}")
+            logger.info(f"Driver initialization failed: {str(e)}") # Sentry captures them use info instead, overwhlems us
             raise
 
     async def destroy(self) -> None:
@@ -72,7 +72,7 @@ class WappalyzerDriver:
             self._initialized = False
             logger.info("Wappalyzer driver destroyed")
         except Exception as e:
-            logger.error(f"Driver cleanup failed: {str(e)}")
+            logger.info(f"Driver cleanup failed: {str(e)}") #Sentry captures them use info instead, overwhlems us
             raise
 
     async def analyze(self,
@@ -98,7 +98,7 @@ class WappalyzerDriver:
                 return await self._analyze_with_browser(url, options)
 
         except Exception as e:
-            logger.error(f"Analysis failed: {str(e)}")
+            logger.info(f"Analysis failed: {str(e)}")
             raise
 
     async def _analyze_http_only(self,
@@ -113,7 +113,7 @@ class WappalyzerDriver:
             return self.analyzer.analyze(page_data)
 
         except Exception as e:
-            logger.error(f"HTTP analysis failed: {str(e)}")
+            logger.info(f"HTTP analysis failed: {str(e)}")
             return []
 
     async def _analyze_with_browser(self,
@@ -126,7 +126,7 @@ class WappalyzerDriver:
             return results
 
         except Exception as e:
-            logger.error(f"Browser analysis failed: {str(e)}")
+            logger.info(f"Browser analysis failed: {str(e)}")
             raise
 
     async def analyze_multiple(self,
@@ -144,7 +144,7 @@ class WappalyzerDriver:
                 try:
                     return await self.analyze(url, headers, options)
                 except Exception as e:
-                    logger.error(f"Failed to analyze {url}: {str(e)}")
+                    logger.info(f"Failed to analyze {url}: {str(e)}") # Sentry captures them use info instead
                     return []
 
         return await asyncio.gather(*(analyze_with_semaphore(url) for url in urls))

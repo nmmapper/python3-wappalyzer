@@ -176,7 +176,7 @@ class AsyncHttpOnlyDriver:
 
     async def init(self) -> None:
         if not self._session:
-            self._session = aiohttp.ClientSession(headers={"User-Agent": "Wappalyzer/1.0"})
+            self._session = aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"})
 
     async def fetch(self, url: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
         if not self._session: await self.init()
@@ -274,7 +274,7 @@ class SyncHttpOnlyDriver:
     """Blocking HTTP driver using requests"""
     def __init__(self):
         self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "Wappalyzer/1.0"})
+        self._session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"})
 
     def __enter__(self):
         self.init()
