@@ -1,7 +1,7 @@
 import json
 import asyncio
 import logging
-from wappalyzer_core.wappalyzer_driver import WappalyzerDriver
+from wappalyzer_core.wappalyzer_driver import WappalyzerDriver,SyncWappalyzerDriver
 from wappalyzer_core.analyzer import Wappalyzer
 from wappalyzer_core.browser import BrowserOptions
 # Assuming these constants point to the correct JSON file paths
@@ -67,19 +67,42 @@ async def scan(domain: str, use_http_only: bool = True):
     # Transform results to name-keyed dictionary
     return {item['name']: item for item in results}
 
-#async def main():
-#    target = "https://www.nmmapper.com"
-##    logger.info(f"Starting scan for {target}")
-    
-#    results = await scan(target, use_http_only=True)
-#    
-#    if results:
-#        print(json.dumps(results, indent=4))
-#    else:
-#        print(f"No technologies detected or domain unreachable for {target}")
 
-#if __name__ == "__main__":
-#    try:
-#        asyncio.run(main())
-#    except KeyboardInterrupt:
-#        pass
+def sync_scan(domain: str, use_http_only: bool = True):
+    """
+    Scans a domain for technologies.
+    Includes fallback from HTTP to Browser if results are empty.
+    """
+    # 1. Load data
+    try:
+        with open(TECHNOLOGY, 'r') as f:
+            technologies = json.load(f)
+        with open(CATEGORY, 'r') as f:
+            categories = json.load(f)
+    except FileNotFoundError as e:
+        logger.info(f"Missing definition files: {e}")
+        return {}
+
+    # 2. Setup Analyzer
+    wappalyzer = Wappalyzer()
+    wappalyzer.set_technologies(technologies)
+    wappalyzer.set_categories(categories)
+    
+    results = []
+
+    try:
+        # Use context manager for automatic cleanup
+        with SyncWappalyzerDriver(analyzer=wappalyzer, browser_options=GLOBAL_OPTIONS, use_http_only=use_http_only) as driver:
+            try:
+                results = driver.analyze_sync(domain)
+            except Exception as e:
+                logger.info(f"Initial scan failed for {domain}: {e}")
+                results = []
+
+    except Exception as e:
+        logger.info(f"Unexpected error during scan orchestration: {e}")
+    finally:
+        pass
+
+    return {item['name']: item for item in results}
+

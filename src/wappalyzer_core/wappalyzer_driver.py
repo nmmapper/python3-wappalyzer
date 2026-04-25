@@ -171,13 +171,22 @@ class SyncWappalyzerDriver:
         self.analyzer = analyzer or Wappalyzer()
 
         if use_http_only:
-            self.driver = AsyncHttpOnlyDriver()
+            self.driver = SyncHttpOnlyDriver()
             self.use_http_only = True
         else:
             self.driver = SyncPlaywrightDriver(browser_options)
             self.use_http_only = False
 
         self._initialized = False
+    
+    def __enter__(self):
+        """Support for 'async with' context manager"""
+        self.init_sync()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Ensures cleanup is called automatically"""
+        self.destroy_sync()
         
     # =========================
     # Sync API (NEW)
