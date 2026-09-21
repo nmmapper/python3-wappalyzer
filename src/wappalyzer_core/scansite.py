@@ -47,16 +47,6 @@ async def scan(domain: str, use_http_only: bool = True):
                 logger.warning(f"Initial scan failed for {domain}: {e}")
                 results = []
 
-        # 3. Fallback Logic: If HTTP-only failed/was empty and we started with it, try full Browser
-        #if not results and use_http_only:
-        #    logger.info(f"No results with HTTP-only for {domain}. Retrying with full browser...")
-        #    async with WappalyzerDriver(analyzer=wappalyzer, browser_options=GLOBAL_OPTIONS, use_http_only=False) as browser_driver:
-        #        try:
-        #            results = await browser_driver.analyze(domain)
-        #        except Exception as e:
-        #            logger.error(f"Browser fallback failed for {domain}: {e}")
-       #             results = []
-
     except Exception as e:
         logger.error(f"Unexpected error during scan orchestration: {e}")
     finally:

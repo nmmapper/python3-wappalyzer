@@ -1,9 +1,13 @@
 """Pattern parsing and compilation module"""
 
-import re, regex  
+import re
+import regex  
 from typing import Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 from enum import Enum
+
+# Characters recognized as valid escape codes in Python regex
+VALID_PYTHON_ESCAPES = set("abfnrtvxcwWsSdDxbBAZEGg1234567890()?*+[]{}|.^$\\")
 
 
 class ConfidenceLevel(Enum):
@@ -17,12 +21,12 @@ class ConfidenceLevel(Enum):
 @dataclass
 class Pattern:
     """Represents a single compiled pattern for technology detection"""
-    regex: re.Pattern
+    regex: Union[re.Pattern, regex.Pattern]
     value: str
     confidence: int = 100
     version: str = ""
 
-    def matches(self, text: str) -> Optional[re.Match]:
+    def matches(self, text: str) -> Optional[Union[re.Match, regex.Match]]:
         """Check if pattern matches text"""
         if not text:
             return None
@@ -35,24 +39,69 @@ class Pattern:
 class PatternCompiler:
     """Compiles regex patterns with special syntax handling"""
 
-    # Special characters that need escaping
-    ESCAPE_CHARS = {'/'}
+    @staticmethod
+    def clean_js_escapes(pattern: str) -> str:
+        """
+        Removes invalid Python escape sequences originating from JS regex strings
+        (e.g., converts '\k' -> 'k', '\/' -> '/').
+        """
+        result = []
+        i = 0
+        n = len(pattern)
 
-    # Quantifiers optimization for long strings
-    QUANTIFIER_LIMITS = {
-        '+': '{1,250}',  # one or more -> 1 to 250
-        '*': '{0,250}',  # zero or more -> 0 to 250
-    }
+        while i < n:
+            if pattern[i] == "\\" and i + 1 < n:
+                next_char = pattern[i + 1]
+
+                # Convert escaped forward slashes '\/' to plain '/'
+                if next_char == "/":
+                    result.append("/")
+                    i += 2
+                    continue
+
+                # Strip backslash for escapes invalid in Python regex
+                if next_char not in VALID_PYTHON_ESCAPES:
+                    result.append(next_char)
+                    i += 2
+                    continue
+                else:
+                    result.append(pattern[i : i + 2])
+                    i += 2
+                    continue
+
+            result.append(pattern[i])
+            i += 1
+
+        return "".join(result)
 
     @staticmethod
-    def compile(pattern_str: str, case_sensitive: bool = False) -> re.Pattern:
+    def optimize_quantifiers(pattern: str) -> str:
+        """
+        Safely limits unbounded '+' and '*' quantifiers to prevent ReDoS on large text payloads.
+        Protects escaped characters like '\+' and '\*' from replacement.
+        """
+        # Placeholders for escaped tokens
+        token_plus = "__escapedPlusToken__"
+        token_star = "__escapedStarToken__"
+
+        pattern = pattern.replace(r"\+", token_plus)
+        pattern = pattern.replace(r"\*", token_star)
+
+        # Replace unbounded '+' that isn't part of range quantifiers or followed by ?
+        pattern = re.sub(r"(?<!\{)\+(?!\?)", "{1,250}", pattern)
+        # Replace unbounded '*' that isn't part of range quantifiers or followed by ?
+        pattern = re.sub(r"(?<!\{)\*(?!\?)", "{0,250}", pattern)
+
+        # Restore escaped tokens
+        pattern = pattern.replace(token_plus, r"\+")
+        pattern = pattern.replace(token_star, r"\*")
+
+        return pattern
+
+    @classmethod
+    def compile(cls, pattern_str: str, case_sensitive: bool = False) -> Union[re.Pattern, regex.Pattern]:
         """
         Compile a pattern string into a regex object.
-
-        Special handling:
-        - Escape forward slashes
-        - Optimize quantifiers for long strings (+, *)
-        - Add case-insensitive flag
 
         Args:
             pattern_str: The regex pattern string
@@ -60,37 +109,35 @@ class PatternCompiler:
 
         Returns:
             Compiled regex pattern object
-
-        Raises:
-            ValueError: If regex is invalid
         """
         try:
-            # Escape slashes
-            optimized = pattern_str.replace('/', '\\/')
+            # 1. Clean invalid JS escapes (e.g. '\k' -> 'k', '\/' -> '/')
+            optimized = cls.clean_js_escapes(pattern_str)
 
-            # Protect escaped plus from being replaced
-            optimized = optimized.replace('\\+', '__escapedPlus__')
+            # 2. Extract JS inline flag delimiters: /pattern/i
+            js_literal_match = re.match(r"^/(.+)/([a-z]*)$", optimized)
+            if js_literal_match:
+                inner_pat, flags = js_literal_match.groups()
+                if "i" in flags:
+                    case_sensitive = False
+                optimized = inner_pat
 
-            # Optimize quantifiers
-            optimized = optimized.replace('+', '{1,250}')
-            optimized = optimized.replace('*', '{0,250}')
+            # 3. Optimize quantifiers for long string payload evaluation
+            optimized = cls.optimize_quantifiers(optimized)
 
-            # Restore escaped plus
-            optimized = optimized.replace('__escapedPlus__', '\\+')
-
-            # Compile with appropriate flags
+            # 4. Set compilation flags
             flags = 0 if case_sensitive else re.IGNORECASE
-            return regex.compile(optimized, flags)
-            #return re.compile(optimized, flags)
 
-        except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {pattern_str}") from e
+            return regex.compile(optimized, flags)
+
+        except (re.error, regex.error) as e:
+            raise ValueError(f"Invalid regex pattern: {pattern_str} (compiled as: {optimized})") from e
 
 
 class PatternParser:
     """Parses pattern strings with metadata (confidence, version)"""
 
-    DELIMITER = '\\;'  # Delimiter between value and metadata
+    DELIMITER = r"\;"  # Delimiter between value and metadata
 
     @staticmethod
     def parse(pattern: Union[str, int, Dict, List],
@@ -98,18 +145,8 @@ class PatternParser:
               is_regex: bool = True) -> Union[Pattern, Dict[str, Pattern], List[Pattern]]:
         """
         Parse a pattern with optional metadata.
-
         Format: "regex_pattern\\;version:1.0\\;confidence:100"
-
-        Args:
-            pattern: Pattern string or nested structure
-            case_sensitive: Case sensitivity for pattern matching
-            is_regex: Whether to compile as regex
-
-        Returns:
-            Pattern object or dict/list of Pattern objects
         """
-        # Handle nested objects recursively
         if isinstance(pattern, dict):
             return {
                 key: PatternParser.parse(value, case_sensitive, is_regex)
@@ -122,7 +159,6 @@ class PatternParser:
                 for item in pattern
             ]
 
-        # Parse single pattern
         if isinstance(pattern, (str, int)):
             return PatternParser._parse_single(
                 str(pattern), case_sensitive, is_regex
@@ -136,11 +172,9 @@ class PatternParser:
                       is_regex: bool = True) -> Pattern:
         """Parse a single pattern string with metadata"""
 
-        # Split by delimiter to extract metadata
         parts = pattern_str.split(PatternParser.DELIMITER)
         value = parts[0]
 
-        # Parse key-value metadata
         confidence = 100
         version = ""
 
@@ -152,18 +186,17 @@ class PatternParser:
                 elif key == 'version':
                     version = val
 
-        # Compile regex if needed
         if is_regex:
-            regex = PatternCompiler.compile(value, case_sensitive)
+            compiled_regex = PatternCompiler.compile(value, case_sensitive)
         else:
-            # Non-regex mode: create a literal match pattern
             try:
-                regex = re.compile(re.escape(value), re.IGNORECASE)
+                flags = 0 if case_sensitive else re.IGNORECASE
+                compiled_regex = re.compile(re.escape(value), flags)
             except re.error as e:
                 raise ValueError(f"Failed to escape pattern: {value}") from e
 
         return Pattern(
-            regex=regex,
+            regex=compiled_regex,
             value=value,
             confidence=confidence,
             version=version
@@ -179,39 +212,20 @@ class PatternFactory:
                   is_regex: bool = True) -> Union[List[Pattern], Dict[str, List[Pattern]]]:
         """
         Convert raw pattern data (string, list, dict) into Pattern objects.
-
-        Handles conversion of various input formats:
-        - String -> List[Pattern]
-        - List -> List[Pattern]
-        - Dict -> Dict[str, List[Pattern]]
-
-        Args:
-            patterns: Raw pattern data
-            case_sensitive: Case sensitivity setting
-            is_regex: Whether patterns are regex
-
-        Returns:
-            Organized pattern structure
         """
         if patterns is None:
             return []
 
-        # Normalize to dict format for processing
         if isinstance(patterns, (str, int)):
             patterns = {'main': patterns}
         elif isinstance(patterns, list):
             patterns = {'main': patterns}
 
-        # Parse all patterns
         parsed = {}
         for key, value in patterns.items():
-            # Normalize key (lowercase unless case-sensitive)
             normalized_key = key if case_sensitive else key.lower()
-
-            # Convert value to list if needed
             value_list = value if isinstance(value, list) else [value]
 
-            # Parse each item
             parsed_patterns = [
                 PatternParser.parse(item, case_sensitive, is_regex)
                 for item in value_list
@@ -219,7 +233,6 @@ class PatternFactory:
 
             parsed[normalized_key] = parsed_patterns
 
-        # Return unwrapped main if that's the only key
         if list(parsed.keys()) == ['main']:
             return parsed['main']
 
