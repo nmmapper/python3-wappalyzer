@@ -176,11 +176,11 @@ class AsyncHttpOnlyDriver:
 
     async def init(self) -> None:
         if not self._session:
-            self._session = aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"})
+            self._session = aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"})
 
     async def fetch(self, url: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
         if not self._session: await self.init()
-        async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             html = await resp.text()
             data = _parse_html_common(html, str(resp.url))
             data.update({
@@ -196,7 +196,6 @@ class AsyncHttpOnlyDriver:
             self._session = None
 
 # --- SYNC LAYERS ---
-
 class SyncPlaywrightDriver:
     """Blocking Browser driver using Playwright"""
     def __init__(self, options: Optional[BrowserOptions] = None):
