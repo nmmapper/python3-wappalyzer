@@ -3,6 +3,9 @@
 import asyncio
 import logging
 import re
+import socket
+import ipaddress
+from urllib.parse import urlparse
 from typing import Dict, Optional, Any, List, Union
 from dataclasses import dataclass, field
 from enum import Enum
@@ -46,11 +49,39 @@ class BrowserOptions:
             args["args"] = self.extra_args
         return args
 
+def is_safe_url(url: str) -> bool:
+    """SSRF prevention: Ensure target does not resolve to local or private IPs"""
+    try:
+        hostname = urlparse(url).hostname
+        if not hostname: 
+            return False
+            
+        # getaddrinfo handles both IPv4 and IPv6 robustly across different OS environments
+        addr_info = socket.getaddrinfo(hostname, None)
+        
+        for result in addr_info:
+            ip = result[4][0]
+            
+            # Strip IPv6 scope IDs (e.g., %eth0) which crash the ipaddress module
+            if '%' in ip:
+                ip = ip.split('%')[0]
+                
+            parsed_ip = ipaddress.ip_address(ip)
+            
+            if parsed_ip.is_private or parsed_ip.is_loopback or parsed_ip.is_link_local or parsed_ip.is_multicast:
+                logger.warning(f"SSRF Blocked: {url} resolves to internal IP {ip}")
+                return False
+                
+        return True
+    except Exception as e:
+        # Log the exact exception so DNS failures aren't hidden
+        logger.error(f"SSRF DNS resolution failed for {url}: {str(e)}")
+        return False
+
 def _parse_html_common(html: str, url: str) -> Dict[str, Any]:
-    """Helper to extract common Wappalyzer signals from HTML"""
-    soup = BeautifulSoup(html, 'html.parser')
+    # LXML is substantially faster for large DOMs than html.parser
+    soup = BeautifulSoup(html, 'lxml')
     
-    # Extract Meta Tags
     meta = {}
     for t in soup.find_all('meta'):
         name = t.get('name') or t.get('property')
@@ -59,10 +90,7 @@ def _parse_html_common(html: str, url: str) -> Dict[str, Any]:
             if name not in meta: meta[name] = []
             meta[name].append(content)
             
-    # Extract Script Sources
     script_src = [t.get('src') for t in soup.find_all('script') if t.get('src')]
-    
-    # Extract Inline Scripts (for pattern matching)
     scripts = [t.string for t in soup.find_all('script') if t.string]
     
     return {
@@ -74,10 +102,7 @@ def _parse_html_common(html: str, url: str) -> Dict[str, Any]:
         'text': soup.get_text(separator=' ', strip=True)
     }
 
-# --- ASYNC LAYERS ---
-
 class AsyncPlaywrightDriver:
-    """Async Browser driver using Playwright"""
     def __init__(self, options: Optional[BrowserOptions] = None):
         self.options = options or BrowserOptions()
         self.browser: Optional[AsyncBrowser] = None
@@ -99,47 +124,31 @@ class AsyncPlaywrightDriver:
         self.context = await self.browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
     async def new_page(self):
-        """
-        Create a new browser page/tab.
-
-        Returns:
-            Playwright Page instance
-
-        Raises:
-            RuntimeError: If browser not initialized or context creation fails
-        """
         if not self.context:
             raise RuntimeError("Browser context not initialized. Call init() first.")
-
         try:
             page = await self.context.new_page()
-
-            # Set default navigation timeout
             page.set_default_timeout(self.options.timeout)
             page.set_default_navigation_timeout(self.options.timeout)
-
             return page
-
         except Exception as e:
             logger.error(f"Failed to create new page: {str(e)}")
             raise
 
     async def fetch(self, url: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
-        """Navigates to URL and extracts all Wappalyzer-relevant data"""
+        if not is_safe_url(url):
+            raise ValueError("Unsafe URL targeted.")
+            
         if not self.context: await self.init()
-        
         page = await self.new_page()
         if headers: await page.set_extra_http_headers(headers)
         
         try:
             response = await page.goto(url, timeout=self.options.timeout, wait_until="networkidle")
-            
-            # Basic page data
             html = await page.content()
             current_url = page.url
             status = response.status if response else 0
             
-            # Wappalyzer specific data points
             headers_dict = response.headers if response else {}
             cookies_list = await self.context.cookies(current_url)
             cookies = {c['name']: c['value'] for c in cookies_list}
@@ -150,7 +159,6 @@ class AsyncPlaywrightDriver:
                 'headers': {k.lower(): v for k, v in headers_dict.items()},
                 'cookies': cookies,
             })
-            
             return data
         finally:
             await page.close()
@@ -163,8 +171,8 @@ class AsyncPlaywrightDriver:
         self._destroyed = True
 
 class AsyncHttpOnlyDriver:
-    """Non-blocking HTTP driver using aiohttp"""
-    def __init__(self):
+    def __init__(self, options: Optional[BrowserOptions] = None):
+        self.options = options or BrowserOptions()
         self._session: Optional[aiohttp.ClientSession] = None
 
     async def __aenter__(self):
@@ -179,8 +187,13 @@ class AsyncHttpOnlyDriver:
             self._session = aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"})
 
     async def fetch(self, url: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
+        if not is_safe_url(url):
+            raise ValueError("Unsafe URL targeted.")
+            
         if not self._session: await self.init()
-        async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        req_timeout = self.options.timeout / 1000.0  # convert ms to seconds
+        
+        async with self._session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=req_timeout)) as resp:
             html = await resp.text()
             data = _parse_html_common(html, str(resp.url))
             data.update({
@@ -195,9 +208,7 @@ class AsyncHttpOnlyDriver:
             await self._session.close()
             self._session = None
 
-# --- SYNC LAYERS ---
 class SyncPlaywrightDriver:
-    """Blocking Browser driver using Playwright"""
     def __init__(self, options: Optional[BrowserOptions] = None):
         self.options = options or BrowserOptions()
         self.browser: Optional[SyncBrowser] = None
@@ -218,29 +229,21 @@ class SyncPlaywrightDriver:
         self.context = self.browser.new_context()
 
     def new_page(self):
-        """
-        Create a new browser page/tab (Sync).
-
-        Returns:
-            Playwright Page instance
-        """
         if not self.context:
             raise RuntimeError("Browser context not initialized. Call init() first.")
-
         try:
             page = self.context.new_page()
-
-            # Set default navigation timeout
             page.set_default_timeout(self.options.timeout)
             page.set_default_navigation_timeout(self.options.timeout)
-
             return page
-
         except Exception as e:
             logger.error(f"Failed to create new page: {str(e)}")
             raise
 
     def fetch(self, url: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
+        if not is_safe_url(url):
+            raise ValueError("Unsafe URL targeted.")
+            
         if not self.context: self.init()
         page = self.new_page()
         if headers: page.set_extra_http_headers(headers)
@@ -270,8 +273,8 @@ class SyncPlaywrightDriver:
         if self.playwright_mgr: self.playwright_mgr.stop()
 
 class SyncHttpOnlyDriver:
-    """Blocking HTTP driver using requests"""
-    def __init__(self):
+    def __init__(self, options: Optional[BrowserOptions] = None):
+        self.options = options or BrowserOptions()
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"})
 
@@ -283,10 +286,14 @@ class SyncHttpOnlyDriver:
         self.destroy()
 
     def init(self) -> None:
-        pass # Requests session is initialized in __init__
+        pass 
 
     def fetch(self, url: str, headers: Optional[Dict] = None) -> Dict[str, Any]:
-        resp = self._session.get(url, headers=headers, timeout=30)
+        if not is_safe_url(url):
+            raise ValueError("Unsafe URL targeted.")
+            
+        req_timeout = self.options.timeout / 1000.0  # convert ms to seconds
+        resp = self._session.get(url, headers=headers, timeout=req_timeout)
         data = _parse_html_common(resp.text, resp.url)
         data.update({
             'status': resp.status_code,

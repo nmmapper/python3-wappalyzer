@@ -38,7 +38,7 @@ def get_wappalyzer_data():
             logger.error(f"[Wappalyzer] Missing definition files: {e}")
             return None, None
     else:
-        logger.info('[Wappalyzer] Successfully loaded definition JSONs FROM cached memory.')
+        logger.info('[Wappalyzer] Loading wappalyzer definitions from cached memory.')
             
     return _TECHNOLOGIES_CACHE, _CATEGORIES_CACHE
 
@@ -68,9 +68,9 @@ async def get_wappalyzer_instance():
             analyzer.set_categories(categories)
             
             _WAPPALYZER_INSTANCE = analyzer
-            logger.info("[Wappalyzer] Pre-loaded definitions and initialized shared analyzer instance.")
+            logger.info("[Wappalyzer] Initialized shared analyzer instance.")
         else:
-            logger.debug('Already initialized wappalyzer instance using it.')
+            logger.debug('[Wappalyzer] Using already existing instance.')
             
     return _WAPPALYZER_INSTANCE
 
@@ -80,16 +80,17 @@ async def scan(domain: str, use_http_only: bool = True):
     Scans a domain for technologies using the shared Wappalyzer singleton.
     """
     # 1. Grab shared analyzer (await async lock)
-    #wappalyzer = await get_wappalyzer_instance()
-    #if not wappalyzer:
-    #    return {}
-    technologies, categories = get_wappalyzer_data()
-    if technologies is None or categories is None:
+    wappalyzer = await get_wappalyzer_instance()
+    if not wappalyzer:
         return {}
+        
+    #technologies, categories = get_wappalyzer_data()
+    #if technologies is None or categories is None:
+    #    return {}
 
-    wappalyzer = Wappalyzer()
-    wappalyzer.set_technologies(technologies)
-    wappalyzer.set_categories(categories)
+    #wappalyzer = Wappalyzer()
+    #wappalyzer.set_technologies(technologies)
+    #wappalyzer.set_categories(categories)
               
     results = []
 

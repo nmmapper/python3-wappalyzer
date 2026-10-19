@@ -14,28 +14,14 @@ logging.basicConfig(
 logger = logging.getLogger("WappalyzerDriver")
 
 class WappalyzerDriver:
-    """
-    High-level interface for Wappalyzer.
-
-    Combines browser automation with technology detection.
-    """
-
     def __init__(self,
                  analyzer: Optional[Wappalyzer] = None,
                  browser_options: Optional[BrowserOptions] = None,
                  use_http_only: bool = False):
-        """
-        Initialize Wappalyzer driver.
-
-        Args:
-            analyzer: Wappalyzer core analyzer instance
-            browser_options: Browser configuration
-            use_http_only: Use HTTP-only driver (no JavaScript execution)
-        """
         self.analyzer = analyzer or Wappalyzer()
 
         if use_http_only:
-            self.driver = AsyncHttpOnlyDriver()
+            self.driver = AsyncHttpOnlyDriver(browser_options)
             self.use_http_only = True
         else:
             self.driver = AsyncPlaywrightDriver(browser_options)
@@ -43,45 +29,35 @@ class WappalyzerDriver:
 
         self._initialized = False
 
-    # =========================
-    # Async API (unchanged)
-    # =========================
     async def __aenter__(self):
-        """Support for 'async with' context manager"""
         await self.init()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Ensures cleanup is called automatically"""
         await self.destroy()
         
     async def init(self) -> None:
-        """Initialize the driver"""
         try:
             await self.driver.init()
             self._initialized = True
             logger.info("Wappalyzer driver initialized")
         except Exception as e:
-            logger.info(f"Driver initialization failed: {str(e)}") # Sentry captures them use info instead, overwhlems us
+            logger.info(f"Driver initialization failed: {str(e)}")
             raise
 
     async def destroy(self) -> None:
-        """Destroy the driver and cleanup resources"""
         try:
             await self.driver.destroy()
             self._initialized = False
             logger.info("Wappalyzer driver destroyed")
         except Exception as e:
-            logger.info(f"Driver cleanup failed: {str(e)}") #Sentry captures them use info instead, overwhlems us
+            logger.info(f"Driver cleanup failed: {str(e)}") 
             raise
 
     async def analyze(self,
                       url: str,
                       headers: Optional[Dict[str, str]] = None,
                       options: Optional[AnalysisOptions] = None) -> List[Dict[str, Any]]:
-        """
-        Analyze a website (async).
-        """
         if not self._initialized:
             raise RuntimeError("Driver not initialized. Call init() first.")
 
@@ -109,7 +85,7 @@ class WappalyzerDriver:
             if not page_data:
                 return []
             
-            logger.info("Got page data continuing to analyze it")
+            #logger.info("Got page data continuing to analyze it")
             return self.analyzer.analyze(page_data)
 
         except Exception as e:
@@ -144,34 +120,20 @@ class WappalyzerDriver:
                 try:
                     return await self.analyze(url, headers, options)
                 except Exception as e:
-                    logger.info(f"Failed to analyze {url}: {str(e)}") # Sentry captures them use info instead
+                    logger.info(f"Failed to analyze {url}: {str(e)}") 
                     return []
 
         return await asyncio.gather(*(analyze_with_semaphore(url) for url in urls))
 
 class SyncWappalyzerDriver:
-    """
-    High-level interface for Wappalyzer.
-
-    Combines browser automation with technology detection.
-    """
-
     def __init__(self,
                  analyzer: Optional[Wappalyzer] = None,
                  browser_options: Optional[BrowserOptions] = None,
                  use_http_only: bool = False):
-        """
-        Initialize Wappalyzer driver.
-
-        Args:
-            analyzer: Wappalyzer core analyzer instance
-            browser_options: Browser configuration
-            use_http_only: Use HTTP-only driver (no JavaScript execution)
-        """
         self.analyzer = analyzer or Wappalyzer()
 
         if use_http_only:
-            self.driver = SyncHttpOnlyDriver()
+            self.driver = SyncHttpOnlyDriver(browser_options)
             self.use_http_only = True
         else:
             self.driver = SyncPlaywrightDriver(browser_options)
@@ -180,33 +142,22 @@ class SyncWappalyzerDriver:
         self._initialized = False
     
     def __enter__(self):
-        """Support for 'async with' context manager"""
         self.init_sync()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Ensures cleanup is called automatically"""
         self.destroy_sync()
-        
-    # =========================
-    # Sync API (NEW)
-    # =========================
 
     def init_sync(self) -> None:
-        """Synchronous wrapper for init()"""
         self.driver.init()
 
     def destroy_sync(self) -> None:
-        """Synchronous wrapper for destroy()"""
         self.driver.destroy()
 
     def analyze_sync(self,
                      url: str,
                      headers: Optional[Dict[str, str]] = None,
                      options: Optional[AnalysisOptions] = None) -> List[Dict[str, Any]]:
-        """
-        Analyze a website synchronously.
-        """
         if self.use_http_only:
             data = self.driver.fetch(url, headers)
             return self.analyzer.analyze(data)
