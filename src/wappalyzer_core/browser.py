@@ -75,7 +75,7 @@ def is_safe_url(url: str) -> bool:
         return True
     except Exception as e:
         # Log the exact exception so DNS failures aren't hidden
-        logger.error(f"SSRF DNS resolution failed for {url}: {str(e)}")
+        logger.info(f"SSRF DNS resolution failed for {url}: {str(e)}")
         return False
 
 def _parse_html_common(html: str, url: str) -> Dict[str, Any]:

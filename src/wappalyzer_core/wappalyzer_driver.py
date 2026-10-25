@@ -17,7 +17,7 @@ class WappalyzerDriver:
     def __init__(self,
                  analyzer: Optional[Wappalyzer] = None,
                  browser_options: Optional[BrowserOptions] = None,
-                 use_http_only: bool = False):
+                 use_http_only: bool = True):
         self.analyzer = analyzer or Wappalyzer()
 
         if use_http_only:
